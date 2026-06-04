@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Self-contained micro-benchmark for the Biggy mapping hot paths (F1/F2/F3).
+    Isolated from Biggy.sln (net45); links the single file under test plus the
+    in-memory IDataReader fake from the characterization project.
+    Run (Release):  dotnet run -c Release
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Optimize>true</Optimize>
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <RootNamespace>Biggy.Benchmarks</RootNamespace>
+    <AssemblyName>Biggy.Benchmarks</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\Biggy\Extensions\ObjectExtensions.cs" Link="Linked\ObjectExtensions.cs" />
+    <Compile Include="..\Biggy.Characterization\FakeDataReader.cs" Link="Linked\FakeDataReader.cs" />
+  </ItemGroup>
+
+</Project>

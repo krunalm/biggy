@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    DB-free characterization harness for the Biggy reflection/mapping hot paths.
+
+    This project is INTENTIONALLY isolated from the legacy .NET Framework 4.5
+    solution (Biggy.sln). It does NOT reference Biggy.csproj; instead it *links*
+    the single source file under test (Extensions/ObjectExtensions.cs) and
+    compiles it against net8.0 so the mapping logic can be exercised on Linux
+    with `dotnet test` and no SQL Server.
+
+    It is not part of Biggy.sln and does not alter the legacy build in any way.
+    Run from this directory:  dotnet test
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>Biggy.Characterization</RootNamespace>
+    <AssemblyName>Biggy.Characterization</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Link only the file under test; compile it as part of this net8.0 project. -->
+    <Compile Include="..\..\Biggy\Extensions\ObjectExtensions.cs" Link="Linked\ObjectExtensions.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+</Project>

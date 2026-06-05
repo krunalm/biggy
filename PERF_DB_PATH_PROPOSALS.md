@@ -13,8 +13,17 @@ it"), I'm holding the commits and surfacing the diffs for your call.
 
 ---
 
-## F4 — `BiggyList<T>` upsert is O(n) per `Add` → O(n²) bulk load
-**File:** `Biggy/BiggyList.cs:97-127`
+## F4 — `BiggyList<T>` upsert is O(n) per `Add` → O(n²) bulk load  ✅ DONE
+**File:** `Biggy/BiggyList.cs`
+**Status:** ✅ **Implemented and verified** (commit `b361fd7`) after the
+`GetHashCode` contract was approved. A `HashSet<T>` membership index makes
+`Add`/`Contains` amortized O(1); the five in-repo offender types got a
+`GetHashCode` consistent with their `Equals`. DB-free characterization 10/10;
+benchmark **98.7 ms → ~1.7 ms** for 5,000 bulk adds (~57×). The text below is the
+original analysis, retained for context.
+
+---
+
 
 ### Why the obvious fix is unsafe
 The O(n²) comes from `_items.Contains(item)` (O(n)) on every `Add`, plus
@@ -94,33 +103,51 @@ integration test can prove identical inserted rows + returned identity.
 ---
 
 ## F7 — `MassiveList<T>.Add` is O(n) membership + one DB insert per item
-**File:** `Biggy/MassiveList.cs:64-86`
+**File:** `Biggy/MassiveList.cs:51-119`
+**Status:** ⏸️ **Ready — held on DB verification only.** The `GetHashCode`
+contract blocker is now **resolved** (F4 fixed the in-repo offender types). The
+in-memory half is a mechanical mirror of the verified F4 change, touching only
+the membership ops — **no DB call or SQL is changed.** It is *not* applied
+because `MassiveList` cannot even be instantiated here (its constructor calls
+`Reload()` → `Model.All<T>()`, a live DB query), so there is no way to run it.
 
-### Observation
-`Add` does `_items.Contains(item)` (O(n)) and a `Model.Insert(item)` (one DB
-round trip) per call; loading many rows one-by-one is N round trips + O(n²)
-membership checks. A bulk path already exists (`AddRange` → `BulkInsert`,
-`MassiveList.cs:88`, `Massive.cs:460`).
+### Exact diff (apply once a SQL Server is reachable to verify)
+```csharp
+// field, next to _items:
+HashSet<T> _index = null;
+void RebuildIndex() { _index = _items == null ? new HashSet<T>() : new HashSet<T>(_items); }
 
-### Why it is held
-- The O(n) membership half has the **same `GetHashCode` blocker as F4**.
-- The per-item DB insert is API-inherent and only avoidable by steering callers
-  to `AddRange`/`BulkInsert` — a usage change, not a localized fix.
-- **No SQL Server here** to verify any change to this path.
+// ctor + Reload(): after `_items = this.Model.All<T>().ToList();`
+RebuildIndex();
 
-### Recommended path
-- Documentation/API guidance: prefer `AddRange` for bulk loads (already the
-  faster path; the `MassiveList` tests use it for the 10k-row case).
-- If `Add`-loops must be fast, that depends on F4's contract decision (hash
-  index) plus a batched-insert buffer — a larger design, owner decision needed.
+// Update(): on the in-place replace branch, after RemoveAt/Insert
+_index.Remove(item); _index.Add(item);
+//        on the else branch it calls Add(item), which maintains _index.
 
-**Unblock:** F4's `GetHashCode` contract decision + a reachable SQL Server.
+// Add(): swap the membership test and maintain the index
+if (_index.Contains(item)) { this.Update(item); }
+else { this.Model.Insert(item); _items.Add(item); _index.Add(item); }
+
+// AddRange(): Reload() already rebuilds _index.
+// Clear():  _items.Clear(); _index.Clear(); this.Model.DeleteWhere("");
+// Contains(): return _index.Contains(item);
+// Remove():  _index.Remove(item); ... return _items.Remove(item);
+```
+The per-item `Model.Insert` round trip is API-inherent (use `AddRange` →
+`BulkInsert` for bulk loads — already the fast path the `MassiveList` tests use).
+
+### Why it is still held
+- **No SQL Server here** to instantiate `MassiveList` or run its integration
+  tests; per the safety rules I do not ship unrunnable data-layer changes.
+
+**Unblock:** a reachable SQL Server so the existing `MassiveList` tests
+(`Tests/MassiveList.cs`) can confirm identical behavior; then apply the diff.
 
 ---
 
 ## Summary
-| Finding | Localized fix exists? | Behavior-preserving here? | Verifiable here? | Status |
-|---|---|---|---|---|
-| F4 | only an O(1)-index fix, needs `GetHashCode` contract | ❌ (breaks dedup for current consumers) | ✅ (DB-free) but fix itself unsafe | **Held — contract decision** |
-| F5 | yes (batch the identity fetch) | ❓ (wire change + cast) | ❌ (no SQL Server) | **Held — needs DB + breaking approval** |
-| F7 | no (API-inherent + F4 blocker) | ❌ | ❌ (no SQL Server) | **Held — depends on F4 + DB** |
+| Finding | Localized fix | Status |
+|---|---|---|
+| F4 | `HashSet<T>` index + `GetHashCode` contract | ✅ **Done & verified** (`b361fd7`), ~57× on bulk add |
+| F5 | batch the identity fetch into one round trip | ⏸️ **Held** — wire-format change + `(int)SCOPE_IDENTITY()` cast; **no SQL Server to verify** |
+| F7 | mirror F4's index on `MassiveList` | ⏸️ **Ready** — contract resolved; diff above; **held only because `MassiveList` needs a live DB to run** |

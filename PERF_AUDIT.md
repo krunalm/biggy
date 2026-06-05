@@ -133,7 +133,7 @@ highest-impact findings without any external dependency.
 | F1 | `ToSingle<T>` did uncached reflection **per row** | `Extensions/ObjectExtensions.cs:91-103` | High (read hot path; 10k-row reads) | Low | MODERATE | 1 | ✅ **DONE** — alloc −41% (time flat). Commit `92f4adf` |
 | F2 | `ToExpando` did uncached `GetProperties()` **per object** on every write | `Extensions/ObjectExtensions.cs:108-122` | High (write/bulk-insert hot path) | Low | MODERATE | 2 | ✅ **DONE** — time −12–16%, alloc −12%. Commit `aaf3740` |
 | F3 | `RecordToExpando` evaluates `rdr[i]` twice per field | `Extensions/ObjectExtensions.cs:74-81` | Low (dynamic read path) | Low | SAFE | 3 | ↩️ **REVERTED** — within noise, 0 alloc change |
-| F4 | `BiggyList.Add` upsert is O(n) (`Contains`+`IndexOf`+`RemoveAt`+`Insert`) → O(n²) bulk | `BiggyList.cs:97-127` | Med (bulk in-memory load) | Med | Needs discussion | 4 | **N** (semantics risk: `Equals` w/o `GetHashCode`) |
+| F4 | `BiggyList.Add` upsert is O(n) (`Contains`+`IndexOf`) → O(n²) bulk | `BiggyList.cs` | High (bulk in-memory load) | Med | MODERATE (w/ contract) | 4 | ✅ **DONE** — ~57× on bulk add. Commit `b361fd7` |
 | F5 | `Insert` makes **two** DB round trips (`ExecuteNonQuery` + `SELECT SCOPE_IDENTITY()`) | `Massive.cs:427-434` | Med (per-insert latency) | Med | Needs discussion | 5 | **N** (changes SQL/wire behavior) |
 | F6 | `BulkInsert` computes `requiredParams`/`batchCounter` then never uses them (dead) | `Massive.cs:460-466` | Negligible | Low | SAFE (micro) | 6 | **N** (de-prioritized micro) |
 | F7 | `MassiveList.Add` does a DB insert **and** O(n) `Contains` per single item | `MassiveList.cs:64-86` | Med (per-item loops) | Med | Needs discussion | 7 | **N** (API-inherent; `AddRange` exists) |
@@ -337,9 +337,9 @@ single commit, satisfying the "revertable as one commit" rule.
 ## Awaiting approval (LARGE refactors)
 - **Compiled accessors** — ✅ approved and landed (`3fa0ba9`,
   `PERF_REFACTOR_compiled_accessors.md`).
-- **F4 / F5 / F7** — held with review-ready diffs in `PERF_DB_PATH_PROPOSALS.md`;
-  each needs either a `GetHashCode` contract decision, a wire-format/"breaking"
-  approval, or a reachable SQL Server to verify. No code shipped for these.
+- **F4** — ✅ approved (`GetHashCode` contract) and landed (`b361fd7`).
+- **F7 / F5** — held with review-ready diffs in `PERF_DB_PATH_PROPOSALS.md`;
+  both need a reachable SQL Server to verify (F5 also changes executed SQL).
 
 ---
 
@@ -355,7 +355,9 @@ container noise); allocations are deterministic.
 | **F1** `ToSingle<T>` | ✅ **landed** | 6.256 → 6.07 ms (~flat, within noise) | 1.32 → 0.78 MB (**−41%**) | `92f4adf` |
 | **Compiled accessors** (LARGE) | ✅ **landed** | `ToSingle` 6.07 → ~5.0 ms (**~−17%**); `ToExpando` ~flat | unchanged (0.78 / 3.81 MB) | `3fa0ba9` |
 | **F3** `RecordToExpando` | ↩️ **reverted** | 3.93 → 3.72 ms (within noise) | 3.30 → 3.30 MB (no change) | — |
-| **F4 / F5 / F7** | ⏸️ **held** | — | — | see `PERF_DB_PATH_PROPOSALS.md` |
+| **F4** `BiggyList.Add` (O(n²)→O(1)) | ✅ **landed** | 98.7 → ~1.7 ms / 5k adds (**~57×**) | 0.91 → 1.22 MB (one-time index) | `b361fd7` |
+| **F7** `MassiveList.Add` | ⏸️ **ready** (diff written) | — | — | held: needs live DB |
+| **F5** `Insert` round-trips | ⏸️ **held** | — | — | wire-format + needs live DB |
 
 Cumulative on the read path (`ToSingle<T>`): **6.256 → ~5.0 ms (~−20% time) and
 1.32 → 0.78 MB (−41% alloc)** vs the original baseline. Write path (`ToExpando`):
@@ -395,15 +397,20 @@ non-compilable properties. Characterization 12/12.
   - `ToSingle<T>` (read path): best 6.07 → ~5.0 ms (**~−17%** vs F1).
   - `ToExpando` (write path): ~flat (ExpandoObject inserts dominate); no regression.
 
-**Held (review-ready diffs in `PERF_DB_PATH_PROPOSALS.md`):**
-- **F4** — O(1)-index fix needs a `GetHashCode` contract change (consumer types
-  override `Equals` without `GetHashCode`); the only "safe" tidy doesn't remove
-  the O(n²), so nothing was shipped. **Held — contract decision.**
+**F4 (BiggyList O(1) upsert index) — landed:** commit `b361fd7` after the
+`GetHashCode` contract was approved. `HashSet<T>` membership index + a
+`GetHashCode` (consistent with `Equals`) added to the five in-repo offender
+types. DB-free BiggyList characterization 10/10 (incl. a contract-change test);
+bulk-add **98.7 → ~1.7 ms (~57×, O(n²)→O(n))**.
+
+**Still held (review-ready diffs in `PERF_DB_PATH_PROPOSALS.md`):**
+- **F7** — contract blocker now resolved by F4; the in-memory index change is a
+  mechanical mirror of F4 (no SQL touched). **Held only because `MassiveList`
+  can't be instantiated here** (ctor does a live `Reload()` DB query). Exact diff
+  written; apply once a SQL Server is reachable.
 - **F5** — batch the identity fetch into one round trip; **changes executed SQL
   (wire format)** + has a latent `(int)SCOPE_IDENTITY()` cast; **no SQL Server to
   verify.** **Held — needs DB + breaking approval.**
-- **F7** — per-item `Add` cost; same `GetHashCode` blocker as F4 + no DB.
-  **Held — depends on F4 + DB.**
 
 ---
 
@@ -423,10 +430,12 @@ green characterization suite (12/12) and benchmark, each change a revertable com
 - **F1** `92f4adf`: −41% alloc on the read path.
 - **Compiled accessors** `3fa0ba9` (LARGE, approved): a further ~−17% time on the
   read path (`ToSingle<T>`). Cumulative read path ≈ **−20% time, −41% alloc**.
+- **F4** `b361fd7` (approved contract): BiggyList bulk upsert **~57× faster**
+  (O(n²)→O(1)); `GetHashCode` added to 5 consumer types.
 - **F3** reverted (within noise).
-- **F4 / F5 / F7** held with review-ready diffs (`PERF_DB_PATH_PROPOSALS.md`):
-  each needs a `GetHashCode` contract decision, a wire-format/"breaking" approval,
-  or a reachable SQL Server to verify — none of which is safe to assume here.
+- **F7 / F5** held with review-ready diffs (`PERF_DB_PATH_PROPOSALS.md`): F7 is a
+  verified-by-analogy mirror of F4 but `MassiveList` can't run here (live DB in
+  its ctor); F5 also changes executed SQL. Both need a reachable SQL Server.
 
 All work is on `claude/perf-audit-rgk0j`. **No public API, exported signature,
 schema, or wire format was changed.** A non-invasive net8.0 test/benchmark harness

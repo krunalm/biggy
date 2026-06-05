@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    DB-free characterization harness for BiggyList<T>'s upsert/ordering semantics
+    (perf finding F4). Links BiggyList.cs + BiggyEventArgs.cs and a stub Inflector,
+    compiled against net8.0 with Newtonsoft.Json. Does NOT reference the legacy
+    net45 Biggy.csproj and is not part of Biggy.sln. Run: dotnet test
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>Biggy.BiggyList.Characterization</RootNamespace>
+    <AssemblyName>Biggy.BiggyList.Characterization</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\Biggy\BiggyList.cs" Link="Linked\BiggyList.cs" />
+    <Compile Include="..\..\Biggy\BiggyEventArgs.cs" Link="Linked\BiggyEventArgs.cs" />
+    <Compile Include="..\Shared\InflectorStub.cs" Link="Linked\InflectorStub.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+</Project>

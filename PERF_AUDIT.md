@@ -2,12 +2,14 @@
 
 **Date:** 2026-06-04
 **Branch:** `claude/perf-audit-rgk0j`
-**Status:** 🟩 **Audit complete + Step 7 executed (option B approved).**
+**Status:** 🟩 **Audit complete + Step 7/8 executed (option B + all items approved).**
 A DB-free safety net was established (isolated net8.0 characterization harness +
-benchmark, see "Safety net status — UPDATE"). SAFE/MODERATE mapping findings were
-worked through under that net: **F2 landed** (real time+alloc win), **F1 landed**
-(alloc win, time flat), **F3 reverted** (within noise). DB-dependent findings
-(F4/F5/F7) remain in "Needs discussion". See "Step 7 — Execution results" below.
+benchmark, see "Safety net status — UPDATE"). Landed under that net: **F2**
+(time+alloc win), **F1** (alloc win, time flat), and **compiled accessors**
+(LARGE, approved — read-path time win). **F3 reverted** (within noise). The
+DB-mutation findings **F4 / F5 / F7 are held with review-ready diffs** in
+`PERF_DB_PATH_PROPOSALS.md` — they can't be *verified* here (no SQL Server) and/or
+cross a wire-format / equality-contract line. See "Step 7 — Execution results".
 
 ---
 
@@ -333,8 +335,11 @@ single commit, satisfying the "revertable as one commit" rule.
 - **Toolchain/test-net strategy (A/B/C above)** — needed before *anything* executes.
 
 ## Awaiting approval (LARGE refactors)
-- None proposed. No LARGE/architectural item is recommended at this stage; the
-  meaningful wins (F1–F3) are MODERATE and localized once a test net exists.
+- **Compiled accessors** — ✅ approved and landed (`3fa0ba9`,
+  `PERF_REFACTOR_compiled_accessors.md`).
+- **F4 / F5 / F7** — held with review-ready diffs in `PERF_DB_PATH_PROPOSALS.md`;
+  each needs either a `GetHashCode` contract decision, a wire-format/"breaking"
+  approval, or a reachable SQL Server to verify. No code shipped for these.
 
 ---
 
@@ -348,7 +353,13 @@ container noise); allocations are deterministic.
 |---|---|---|---|---|
 | **F2** `ToExpando` | ✅ **landed** | 5.488 → 4.581 ms (**−16.5%**) | 4.35 → 3.81 MB (**−12.4%**) | `aaf3740` |
 | **F1** `ToSingle<T>` | ✅ **landed** | 6.256 → 6.07 ms (~flat, within noise) | 1.32 → 0.78 MB (**−41%**) | `92f4adf` |
+| **Compiled accessors** (LARGE) | ✅ **landed** | `ToSingle` 6.07 → ~5.0 ms (**~−17%**); `ToExpando` ~flat | unchanged (0.78 / 3.81 MB) | `3fa0ba9` |
 | **F3** `RecordToExpando` | ↩️ **reverted** | 3.93 → 3.72 ms (within noise) | 3.30 → 3.30 MB (no change) | — |
+| **F4 / F5 / F7** | ⏸️ **held** | — | — | see `PERF_DB_PATH_PROPOSALS.md` |
+
+Cumulative on the read path (`ToSingle<T>`): **6.256 → ~5.0 ms (~−20% time) and
+1.32 → 0.78 MB (−41% alloc)** vs the original baseline. Write path (`ToExpando`):
+**−16.5% time, −12.4% alloc**.
 
 **Tests:** characterization suite **10/10 green** after every step (before F1,
 after F2, after F1, after F3-revert). No previously-passing test regressed.
@@ -377,15 +388,22 @@ after F2, after F1, after F3-revert). No previously-passing test regressed.
   real remaining cost is **reflective member access**, addressable only by
   compiled accessors (see below).
 
-**Remaining (await your decision):**
-- **F4 / F5 / F7** — Needs discussion (DB semantics / wire-format / API-shaped;
-  also not runnable without SQL Server here).
-- **Compiled property accessors** (expression-tree / `DynamicMethod` getters &
-  setters cached per property) are the next real *time* win for both F1 and F2,
-  since reflective `Get/SetValue` is now the dominant cost. This changes the
-  member-access *mechanism* (risk of subtle type-coercion differences vs
-  `PropertyInfo.SetValue`) → I classify it **LARGE / needs approval** and have
-  *not* implemented it. Say the word and I'll write `PERF_REFACTOR_compiled_accessors.md`.
+**Compiled accessors (LARGE, approved) — landed:** commit `3fa0ba9`,
+design doc `PERF_REFACTOR_compiled_accessors.md`. Expression-compiled getters/
+setters cached per type as index-aligned arrays, with reflection fallback for
+non-compilable properties. Characterization 12/12.
+  - `ToSingle<T>` (read path): best 6.07 → ~5.0 ms (**~−17%** vs F1).
+  - `ToExpando` (write path): ~flat (ExpandoObject inserts dominate); no regression.
+
+**Held (review-ready diffs in `PERF_DB_PATH_PROPOSALS.md`):**
+- **F4** — O(1)-index fix needs a `GetHashCode` contract change (consumer types
+  override `Equals` without `GetHashCode`); the only "safe" tidy doesn't remove
+  the O(n²), so nothing was shipped. **Held — contract decision.**
+- **F5** — batch the identity fetch into one round trip; **changes executed SQL
+  (wire format)** + has a latent `(int)SCOPE_IDENTITY()` cast; **no SQL Server to
+  verify.** **Held — needs DB + breaking approval.**
+- **F7** — per-item `Add` cost; same `GetHashCode` blocker as F4 + no DB.
+  **Held — depends on F4 + DB.**
 
 ---
 
@@ -399,14 +417,18 @@ cd ../Biggy.Benchmarks && dotnet run -c Release                # time + alloc
 ---
 
 ## Bottom line
-With option B's safety net in place, **F1 and F2 landed** behind a green
-characterization suite and benchmark, each as its own revertable commit:
-- **F2**: −16.5% time / −12.4% allocations on the write/bulk-insert mapping path.
-- **F1**: −41% allocations on the read mapping path (time flat — bound by
-  reflective `SetValue`).
-- **F3** reverted (within noise); **F4/F5/F7** still need your input (DB/wire
-  semantics, not runnable here).
+With option B's safety net in place, the mapping hot paths were optimized behind a
+green characterization suite (12/12) and benchmark, each change a revertable commit:
+- **F2** `aaf3740`: −16.5% time / −12.4% alloc on the write/bulk-insert path.
+- **F1** `92f4adf`: −41% alloc on the read path.
+- **Compiled accessors** `3fa0ba9` (LARGE, approved): a further ~−17% time on the
+  read path (`ToSingle<T>`). Cumulative read path ≈ **−20% time, −41% alloc**.
+- **F3** reverted (within noise).
+- **F4 / F5 / F7** held with review-ready diffs (`PERF_DB_PATH_PROPOSALS.md`):
+  each needs a `GetHashCode` contract decision, a wire-format/"breaking" approval,
+  or a reachable SQL Server to verify — none of which is safe to assume here.
 
-The next *time* win (F1/F2) requires **compiled accessors** — a LARGE change I
-will not make without explicit approval. All work is on `claude/perf-audit-rgk0j`;
-no public API, signature, schema, or wire format was changed.
+All work is on `claude/perf-audit-rgk0j`. **No public API, exported signature,
+schema, or wire format was changed.** A non-invasive net8.0 test/benchmark harness
+was added under `perf-harness/` (not part of `Biggy.sln`; legacy net45 build
+untouched).

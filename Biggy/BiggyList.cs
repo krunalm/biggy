@@ -12,6 +12,12 @@ namespace Biggy
     public class BiggyList<T> : ICollection<T> {
 
       List<T> _items = null;
+      // Membership index kept in sync with _items so Add/Contains are amortized
+      // O(1) instead of O(n) (perf finding F4 - bulk Add was O(n^2)). This relies
+      // on T implementing GetHashCode consistently with Equals; types stored in a
+      // BiggyList must honor that contract (the same Equals already drives the
+      // upsert semantics below).
+      HashSet<T> _index = null;
       public string DbDirectory { get; set; }
       public bool InMemory { get; set; }
       public string DbFileName { get; set; }
@@ -50,7 +56,13 @@ namespace Biggy
         this.DbFileName = this.DbName + ".json";
         this.SetDataDirectory(dbPath);
         _items = TryLoadFileData(this.DbPath);
+        RebuildIndex();
 
+      }
+
+      // Rebuilds the membership index from the current _items (after load/reload).
+      void RebuildIndex() {
+        _index = _items == null ? new HashSet<T>() : new HashSet<T>(_items);
       }
 
 
@@ -95,6 +107,7 @@ namespace Biggy
 
       public void Reload() {
         _items = TryLoadFileData(this.DbPath);
+        RebuildIndex();
       }
 
       public void Update(T item) {
@@ -102,6 +115,9 @@ namespace Biggy
         if (index > -1) {
           _items.RemoveAt(index);
           _items.Insert(index, item);
+          // Swap the stored reference in the index for the new (equal) item.
+          _index.Remove(item);
+          _index.Add(item);
         } else {
           Add(item);
         }
@@ -110,12 +126,13 @@ namespace Biggy
 
       public void Add(T item) {
 
-        if (_items.Contains(item)) {
+        if (_index.Contains(item)) {
           //let's not overwrite -- this will be determined by
           //item.Equals()
           Update(item);
         } else {
           _items.Add(item);
+          _index.Add(item);
         }
 
         //_items.Add(item);
@@ -134,6 +151,7 @@ namespace Biggy
 
       public void Clear() {
         _items.Clear();
+        _index.Clear();
         if (this.Changed != null) {
           var args = new BiggyEventArgs<T>();
           this.Changed.Invoke(this, args);
@@ -141,7 +159,7 @@ namespace Biggy
       }
 
       public bool Contains(T item) {
-        return _items.Contains(item);
+        return _index.Contains(item);
       }
 
       public void CopyTo(T[] array, int arrayIndex) {
@@ -167,6 +185,7 @@ namespace Biggy
           args.Item = item;
           this.Changed.Invoke(this, args);
         }
+        _index.Remove(item);
         return _items.Remove(item);
       }
 

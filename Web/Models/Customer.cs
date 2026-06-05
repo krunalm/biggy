@@ -23,6 +23,11 @@ namespace Web.Models {
       return c1.Email == this.Email;
     }
 
+    // Consistent with Equals (keyed on Email) for BiggyList's hash index (F4).
+    public override int GetHashCode() {
+      return this.Email == null ? 0 : this.Email.GetHashCode();
+    }
+
     public override string ToString() {
       return this.FullName;
     }

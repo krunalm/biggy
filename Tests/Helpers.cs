@@ -20,5 +20,11 @@ namespace Tests {
       return this.Sku == p1.Sku;
     }
 
+    // Consistent with Equals (keyed on Sku) so Product works correctly in the
+    // hash-based membership index BiggyList uses (perf finding F4).
+    public override int GetHashCode() {
+      return this.Sku == null ? 0 : this.Sku.GetHashCode();
+    }
+
   }
 }

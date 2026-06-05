@@ -21,6 +21,11 @@ namespace Biggy.Tasks {
       return this.Sku.Equals(p1.Sku);
     }
 
+    // Consistent with Equals (keyed on Sku) for BiggyList's hash index (F4).
+    public override int GetHashCode() {
+      return this.Sku.GetHashCode();
+    }
+
   }
   class OrderDetail {
     public decimal UnitPrice { get; set; }
@@ -41,6 +46,11 @@ namespace Biggy.Tasks {
     public override bool Equals(object obj) {
       var p1 = (Product)obj;
       return this.Sku == p1.Sku;
+    }
+
+    // Consistent with Equals (keyed on Sku) for BiggyList's hash index (F4).
+    public override int GetHashCode() {
+      return this.Sku == null ? 0 : this.Sku.GetHashCode();
     }
 
   }

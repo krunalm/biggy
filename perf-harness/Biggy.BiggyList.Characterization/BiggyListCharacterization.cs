@@ -157,6 +157,23 @@ namespace Biggy.BiggyList.Characterization {
 
     // ---------- events ----------
 
+    // ---------- contract change (F4) ----------
+
+    [Fact]
+    public void Contract_a_type_without_GetHashCode_no_longer_dedups_by_equality() {
+      // DELIBERATE behavior change introduced by F4: BiggyList now uses a hash
+      // index for membership, so types that override Equals WITHOUT a consistent
+      // GetHashCode (reference-hashed) are treated as distinct and are NOT
+      // upserted. This is the documented contract: stored types must implement
+      // GetHashCode consistently with Equals. (Before F4, List.Contains used
+      // Equals only and this would have deduped to a single item.)
+      var list = NewList<LooseProduct>("loose");
+      list.Add(new LooseProduct { Sku = "XXX", Name = "first" });
+      list.Add(new LooseProduct { Sku = "XXX", Name = "second" });
+
+      Assert.Equal(2, list.Count); // not deduped, because GetHashCode is inconsistent
+    }
+
     [Fact]
     public void Add_and_Save_fire_events() {
       var list = NewList<Product>("p");

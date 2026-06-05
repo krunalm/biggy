@@ -6,6 +6,7 @@ using System.Data;
 using System.Data.Common;
 using System.Dynamic;
 using System.Linq;
+using System.Linq.Expressions;
 using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
@@ -21,6 +22,61 @@ namespace Biggy.Extensions {
 
     static PropertyInfo[] GetCachedProperties(Type type) {
       return _propertyCache.GetOrAdd(type, t => t.GetProperties());
+    }
+
+    // Compiled getter/setter delegates that replace the reflective PropertyInfo.
+    // Get/SetValue calls (the dominant cost left after F1/F2) on the mapping hot
+    // paths. They are cached PER TYPE as arrays index-aligned with the cached
+    // PropertyInfo[], so the hot loops do an O(1) array index instead of a
+    // per-element dictionary lookup. A null slot means "not compilable"
+    // (read-only/write-only/indexed/non-public accessor) and the caller falls
+    // back to reflection, preserving the original behavior exactly (including its
+    // throw when a column matches a read-only property).
+    // (Compiled-accessors refactor; see PERF_REFACTOR_compiled_accessors.md.)
+    sealed class TypeAccessors {
+      public PropertyInfo[] Props;
+      public Func<object, object>[] Getters;
+      public Action<object, object>[] Setters;
+    }
+
+    static readonly ConcurrentDictionary<Type, TypeAccessors> _accessorCache =
+      new ConcurrentDictionary<Type, TypeAccessors>();
+
+    static TypeAccessors GetAccessors(Type type) {
+      return _accessorCache.GetOrAdd(type, t => {
+        var props = GetCachedProperties(t);
+        var getters = new Func<object, object>[props.Length];
+        var setters = new Action<object, object>[props.Length];
+        for (int i = 0; i < props.Length; i++) {
+          getters[i] = BuildGetter(props[i]);
+          setters[i] = BuildSetter(props[i]);
+        }
+        return new TypeAccessors { Props = props, Getters = getters, Setters = setters };
+      });
+    }
+
+    static Func<object, object> BuildGetter(PropertyInfo p) {
+      // Only public, parameterless getters get a compiled delegate; anything
+      // else returns null so the caller falls back to reflection.
+      if (p.GetIndexParameters().Length != 0 || p.GetGetMethod(false) == null) return null;
+      var o = Expression.Parameter(typeof(object), "o");
+      var body = Expression.Convert(
+        Expression.Property(Expression.Convert(o, p.DeclaringType), p),
+        typeof(object));
+      return Expression.Lambda<Func<object, object>>(body, o).Compile();
+    }
+
+    static Action<object, object> BuildSetter(PropertyInfo p) {
+      // Only public, parameterless setters get a compiled delegate; anything
+      // else returns null so the caller falls back to reflection (which can write
+      // non-public members and preserves the original throw on read-only props).
+      if (p.GetIndexParameters().Length != 0 || p.GetSetMethod(false) == null) return null;
+      var o = Expression.Parameter(typeof(object), "o");
+      var v = Expression.Parameter(typeof(object), "v");
+      var assign = Expression.Assign(
+        Expression.Property(Expression.Convert(o, p.DeclaringType), p),
+        Expression.Convert(v, p.PropertyType));
+      return Expression.Lambda<Action<object, object>>(assign, o, v).Compile();
     }
 
 
@@ -102,14 +158,22 @@ namespace Biggy.Extensions {
 
     public static T ToSingle<T>(this IDataReader rdr) where T : new() {
       var item = new T();
-      // typeof(T) == item.GetType() under the new() constraint; cache the
-      // property array so the per-row read path stops re-reflecting. (F1)
-      var props = GetCachedProperties(typeof(T));
-      foreach (var prop in props) {
+      // typeof(T) == item.GetType() under the new() constraint. Cached, type-
+      // aligned property + compiled-setter arrays remove per-row reflection (F1)
+      // and per-cell reflective SetValue (compiled accessors).
+      var acc = GetAccessors(typeof(T));
+      var props = acc.Props;
+      var setters = acc.Setters;
+      for (int p = 0; p < props.Length; p++) {
         for (int i = 0; i < rdr.FieldCount; i++) {
-          if (rdr.GetName(i).Equals(prop.Name, StringComparison.InvariantCultureIgnoreCase)) {
+          if (rdr.GetName(i).Equals(props[p].Name, StringComparison.InvariantCultureIgnoreCase)) {
             var val = rdr.GetValue(i);
-            prop.SetValue(item, val);
+            var setter = setters[p];
+            if (setter != null) {
+              setter(item, val);
+            } else {
+              props[p].SetValue(item, val);
+            }
           }
         }
       }
@@ -127,9 +191,12 @@ namespace Biggy.Extensions {
         var nv = (NameValueCollection)o;
         nv.Cast<string>().Select(key => new KeyValuePair<string, object>(key, nv[key])).ToList().ForEach(i => d.Add(i));
       } else {
-        var props = GetCachedProperties(o.GetType());
-        foreach (var item in props) {
-          d.Add(item.Name, item.GetValue(o, null));
+        var acc = GetAccessors(o.GetType());
+        var props = acc.Props;
+        var getters = acc.Getters;
+        for (int i = 0; i < props.Length; i++) {
+          var getter = getters[i];
+          d.Add(props[i].Name, getter != null ? getter(o) : props[i].GetValue(o, null));
         }
       }
       return result;

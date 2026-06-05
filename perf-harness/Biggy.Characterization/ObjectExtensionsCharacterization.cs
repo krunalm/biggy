@@ -165,6 +165,39 @@ namespace Biggy.Characterization {
       Assert.Equal("2", d["Second"]);
     }
 
+    // ---------- compiled-accessor edge cases (fallback path) ----------
+
+    public class WithReadOnly {
+      public int Id { get; set; }
+      public string Computed { get { return "ro-" + Id; } }   // no setter
+    }
+
+    [Fact]
+    public void ToSingle_throws_when_a_column_matches_a_read_only_property() {
+      // Characterization of the ORIGINAL behavior: ToSingle calls SetValue on
+      // every name-matched property, so a column matching a read-only property
+      // throws. The compiled-accessor refactor must preserve this (it falls back
+      // to reflective SetValue for non-writable properties, which still throws).
+      var rdr = FakeDataReader.FromRows(
+        new[] { "Id", "Computed" },
+        new object[] { 7, "from-db" });
+      Assert.True(rdr.Read());
+
+      Assert.ThrowsAny<Exception>(() => rdr.ToSingle<WithReadOnly>());
+    }
+
+    [Fact]
+    public void ToExpando_reads_value_type_and_reference_type_properties() {
+      var t = new Transaction { TransactionId = 11, Amount = 2.50m, Comment = "hi", Identifier = null };
+
+      var d = (IDictionary<string, object>)t.ToExpando();
+
+      Assert.Equal(11, d["TransactionId"]);   // value type, boxed
+      Assert.Equal(2.50m, d["Amount"]);       // value type, boxed
+      Assert.Equal("hi", d["Comment"]);       // reference type
+      Assert.Null(d["Identifier"]);           // null reference
+    }
+
     [Fact]
     public void ToDictionary_returns_the_property_map() {
       var t = new Transaction { TransactionId = 1, Comment = "z" };

@@ -1,15 +1,27 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Data;
 using System.Data.Common;
 using System.Dynamic;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
 
 namespace Biggy.Extensions {
   public static class ObjectExtensions {
+
+    // Cache the reflected property set per type so the write/bulk-insert paths
+    // (ToExpando -> Insert/Update/BulkInsert/BuildCommands) don't re-reflect on
+    // every object. Immutable for a given Type. (Perf finding F2.)
+    static readonly ConcurrentDictionary<Type, PropertyInfo[]> _propertyCache =
+      new ConcurrentDictionary<Type, PropertyInfo[]>();
+
+    static PropertyInfo[] GetCachedProperties(Type type) {
+      return _propertyCache.GetOrAdd(type, t => t.GetProperties());
+    }
 
 
     public static void CloneFromObject(this object o, object record) {
@@ -113,7 +125,7 @@ namespace Biggy.Extensions {
         var nv = (NameValueCollection)o;
         nv.Cast<string>().Select(key => new KeyValuePair<string, object>(key, nv[key])).ToList().ForEach(i => d.Add(i));
       } else {
-        var props = o.GetType().GetProperties();
+        var props = GetCachedProperties(o.GetType());
         foreach (var item in props) {
           d.Add(item.Name, item.GetValue(o, null));
         }

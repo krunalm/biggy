@@ -2,9 +2,12 @@
 
 **Date:** 2026-06-04
 **Branch:** `claude/perf-audit-rgk0j`
-**Status:** 🟥 **AUDIT ONLY — auto-execution (Step 7) BLOCKED.** No code changed.
-Reason: the safety net required by the workflow cannot be established in this
-environment (see "Safety net status"). All findings below are static analysis.
+**Status:** 🟩 **Audit complete + Step 7 executed (option B approved).**
+A DB-free safety net was established (isolated net8.0 characterization harness +
+benchmark, see "Safety net status — UPDATE"). SAFE/MODERATE mapping findings were
+worked through under that net: **F2 landed** (real time+alloc win), **F1 landed**
+(alloc win, time flat), **F3 reverted** (within noise). DB-dependent findings
+(F4/F5/F7) remain in "Needs discussion". See "Step 7 — Execution results" below.
 
 ---
 
@@ -31,7 +34,31 @@ Projects: **Biggy** (class library — the audit target), **Tests** (xUnit 1.9.2
 
 ---
 
-## Step 2 — Safety net status 🟥 **CANNOT ESTABLISH — STOP**
+## Safety net status — UPDATE (option B established) 🟩
+
+After approval of **option B**, a runnable, **DB-free** safety net was created
+*without modifying the legacy net45 solution*:
+- Installed .NET SDK **8.0.421** into the container (env-only; the Microsoft
+  `.deb`s were extracted under `/opt/dn` because the SDK CDNs are blocked but
+  `packages.microsoft.com` is reachable). No repo build files were retargeted.
+- Added `perf-harness/Biggy.Characterization` — an isolated **net8.0** xUnit
+  project that **links** `Biggy/Extensions/ObjectExtensions.cs` (does *not*
+  reference `Biggy.csproj`) and exercises the mapping code via an in-memory
+  `IDataReader` fake. **10/10 characterization tests pass** and pinned current
+  behavior *before* any change.
+- Added `perf-harness/Biggy.Benchmarks` — a self-contained net8.0 time+allocation
+  micro-benchmark over a 10k-row workload, committed with a baseline.
+- Neither project is part of `Biggy.sln`; the legacy .NET 4.5 build is untouched.
+- Caveat: tests/benchmarks run on **net8.0**, not net45. The mapping logic is
+  pure BCL reflection/`IDataReader`, so behavior is representative; absolute
+  timings are not a net45 number. DB-backed paths (SQL Server) are still not
+  runnable here — F4/F5/F7 remain undecided.
+
+The original blocker analysis (pre-approval) is preserved below for the record.
+
+---
+
+## Step 2 — Safety net status (original assessment) 🟥 **CANNOT ESTABLISH — STOP**
 
 This is the decisive finding. Per safety rule 5 and Step 2
 ("If the test suite is failing on a clean checkout, STOP"), I did not proceed to
@@ -101,9 +128,9 @@ highest-impact findings without any external dependency.
 
 | # | Finding | File:Line | Impact | Effort | Class | Priority | Auto-exec? |
 |---|---|---|---|---|---|---|---|
-| F1 | `ToSingle<T>` does uncached reflection + O(props×fields) name match **per row** | `Extensions/ObjectExtensions.cs:90-104` | High (read hot path; 10k-row reads) | Low–Med | MODERATE | 1 | **N** (no test net / benchmark) |
-| F2 | `ToExpando` does uncached `GetProperties()` **per object** on every write | `Extensions/ObjectExtensions.cs:107-124` | High (write hot path) | Low–Med | MODERATE | 2 | **N** (no test net / benchmark) |
-| F3 | `RecordToExpando` rebuilds field metadata per row | `Extensions/ObjectExtensions.cs:73-83` | Med (dynamic read path) | Low | SAFE→MODERATE | 3 | **N** (no test net / benchmark) |
+| F1 | `ToSingle<T>` did uncached reflection **per row** | `Extensions/ObjectExtensions.cs:91-103` | High (read hot path; 10k-row reads) | Low | MODERATE | 1 | ✅ **DONE** — alloc −41% (time flat). Commit `92f4adf` |
+| F2 | `ToExpando` did uncached `GetProperties()` **per object** on every write | `Extensions/ObjectExtensions.cs:108-122` | High (write/bulk-insert hot path) | Low | MODERATE | 2 | ✅ **DONE** — time −12–16%, alloc −12%. Commit `aaf3740` |
+| F3 | `RecordToExpando` evaluates `rdr[i]` twice per field | `Extensions/ObjectExtensions.cs:74-81` | Low (dynamic read path) | Low | SAFE | 3 | ↩️ **REVERTED** — within noise, 0 alloc change |
 | F4 | `BiggyList.Add` upsert is O(n) (`Contains`+`IndexOf`+`RemoveAt`+`Insert`) → O(n²) bulk | `BiggyList.cs:97-127` | Med (bulk in-memory load) | Med | Needs discussion | 4 | **N** (semantics risk: `Equals` w/o `GetHashCode`) |
 | F5 | `Insert` makes **two** DB round trips (`ExecuteNonQuery` + `SELECT SCOPE_IDENTITY()`) | `Massive.cs:427-434` | Med (per-insert latency) | Med | Needs discussion | 5 | **N** (changes SQL/wire behavior) |
 | F6 | `BulkInsert` computes `requiredParams`/`batchCounter` then never uses them (dead) | `Massive.cs:460-466` | Negligible | Low | SAFE (micro) | 6 | **N** (de-prioritized micro) |
@@ -200,19 +227,19 @@ localized fix. → **Needs discussion.**
 
 ## Plan (checklist, grouped by class, ordered by impact-to-effort)
 
-> ⚠️ **All boxes remain unchecked: execution is blocked until a safety net exists.**
+> ✅ **Pre-reqs + F1/F2 landed; F3 reverted. See "Step 7 — Execution results".**
 
-### Pre-req (must land first)
-- [ ] Add DB-free **characterization tests** for `ToSingle<T>`, `ToExpando`,
-      `RecordToExpando` (in-memory `IDataReader` fake). Must pass on **unmodified**
-      code. *(Needs your approval — adds to test project.)*
-- [ ] Add a **BenchmarkDotNet** project (or a `Stopwatch` micro-harness) for the
-      read/write mapping paths to capture baselines. *(Needs your approval — new project.)*
+### Pre-req (landed)
+- [x] DB-free **characterization tests** for `ToSingle<T>`, `ToExpando`,
+      `RecordToExpando` (in-memory `IDataReader` fake). Pass on **unmodified**
+      code (10/10). Commit `829c09b`.
+- [x] **Micro-benchmark** harness + committed baseline. Commit `4e45fc2`.
 
-### MODERATE (auto-eligible *only after* the pre-reqs + green suite)
-- [ ] **F1** — cache `PropertyInfo[]` per type + per-reader ordinal map in `ToSingle<T>`.
-- [ ] **F2** — reuse the per-type `PropertyInfo[]` cache in `ToExpando`.
-- [ ] **F3** — hoist column-name lookups in `RecordToExpando`.
+### MODERATE (executed under the net)
+- [x] **F2** — cache per-type `PropertyInfo[]` in `ToExpando`. Commit `aaf3740`.
+- [x] **F1** — cache per-type `PropertyInfo[]` in `ToSingle<T>` (loop unchanged).
+      Commit `92f4adf`.
+- [ ] ~~**F3** — avoid double `rdr[i]`~~ → **reverted, "Not worth it"** (within noise).
 
 ### Needs discussion (do not execute)
 - [ ] **F4** — `BiggyList` O(n²) upsert (blocked by `Equals`/`GetHashCode` mismatch).
@@ -311,10 +338,75 @@ single commit, satisfying the "revertable as one commit" rule.
 
 ---
 
+## Step 7 — Execution results
+
+Environment: .NET SDK 8.0.421, net8.0, isolated harness. Benchmark = 10k items
+per pass, median of 40 iterations, **best of 3 runs** quoted for time (robust to
+container noise); allocations are deterministic.
+
+| Finding | Result | Time (best, before → after) | Alloc/pass (before → after) | Commit |
+|---|---|---|---|---|
+| **F2** `ToExpando` | ✅ **landed** | 5.488 → 4.581 ms (**−16.5%**) | 4.35 → 3.81 MB (**−12.4%**) | `aaf3740` |
+| **F1** `ToSingle<T>` | ✅ **landed** | 6.256 → 6.07 ms (~flat, within noise) | 1.32 → 0.78 MB (**−41%**) | `92f4adf` |
+| **F3** `RecordToExpando` | ↩️ **reverted** | 3.93 → 3.72 ms (within noise) | 3.30 → 3.30 MB (no change) | — |
+
+**Tests:** characterization suite **10/10 green** after every step (before F1,
+after F2, after F1, after F3-revert). No previously-passing test regressed.
+
+**Items completed (2):**
+- **F2** — clear win on both axes. `GetProperties()` was re-reflected per object on
+  the write/bulk-insert path; now cached per `Type`. Behavior identical.
+- **F1** — allocation/GC-pressure win (one `PropertyInfo[]` array per row removed
+  on the read path); wall-clock flat because reflective `SetValue` + name
+  comparison still dominate and the runtime already caches `GetProperties()`
+  cheaply. Kept per the stated bar ("≥10% time **and/or** allocation").
+
+**Items reverted (1):**
+- **F3** — the double-`rdr[i]` micro-opt is within noise and changes no
+  allocation on this harness (the `ExpandoObject` dominates). Real-DB benefit
+  (where `SqlDataReader`'s indexer does work) is plausible but **unverifiable
+  here**, so it stays out. Moved to "Needs discussion".
+
+**Discarded approach (recorded so it isn't retried blindly):**
+- An initial F1 that *also* replaced the match loop with a per-row
+  `ConcurrentDictionary` + `StringComparer.InvariantCultureIgnoreCase` lookup
+  **regressed** wall-clock time (best 6.26 → 11.4 ms) despite lower allocations —
+  the per-row dictionary `GetOrAdd` + culture-aware hashing cost more than the
+  original loop. Reverted before commit. Lesson: on this codebase the only safe
+  net mapping win from caching is removing the per-call array allocation; the
+  real remaining cost is **reflective member access**, addressable only by
+  compiled accessors (see below).
+
+**Remaining (await your decision):**
+- **F4 / F5 / F7** — Needs discussion (DB semantics / wire-format / API-shaped;
+  also not runnable without SQL Server here).
+- **Compiled property accessors** (expression-tree / `DynamicMethod` getters &
+  setters cached per property) are the next real *time* win for both F1 and F2,
+  since reflective `Get/SetValue` is now the dominant cost. This changes the
+  member-access *mechanism* (risk of subtle type-coercion differences vs
+  `PropertyInfo.SetValue`) → I classify it **LARGE / needs approval** and have
+  *not* implemented it. Say the word and I'll write `PERF_REFACTOR_compiled_accessors.md`.
+
+---
+
+## How to reproduce
+```bash
+source /opt/dn/env.sh                      # .NET 8 SDK on PATH (this container)
+cd perf-harness/Biggy.Characterization && dotnet test          # 10/10 green
+cd ../Biggy.Benchmarks && dotnet run -c Release                # time + alloc
+```
+
+---
+
 ## Bottom line
-The two highest-value, lowest-risk wins are **F1** and **F2** (kill per-row/per-object
-reflection on the read/write hot paths). They are MODERATE and localized to
-`ObjectExtensions.cs`, but the workflow forbids executing them until (1) a runnable
-toolchain exists and (2) DB-free characterization tests + a benchmark establish a
-verifiable baseline. **I have stopped at Step 7 and changed no code.** Tell me how
-you'd like to proceed on the toolchain/test-net (options A/B/C) and I'll continue.
+With option B's safety net in place, **F1 and F2 landed** behind a green
+characterization suite and benchmark, each as its own revertable commit:
+- **F2**: −16.5% time / −12.4% allocations on the write/bulk-insert mapping path.
+- **F1**: −41% allocations on the read mapping path (time flat — bound by
+  reflective `SetValue`).
+- **F3** reverted (within noise); **F4/F5/F7** still need your input (DB/wire
+  semantics, not runnable here).
+
+The next *time* win (F1/F2) requires **compiled accessors** — a LARGE change I
+will not make without explicit approval. All work is on `claude/perf-audit-rgk0j`;
+no public API, signature, schema, or wire format was changed.

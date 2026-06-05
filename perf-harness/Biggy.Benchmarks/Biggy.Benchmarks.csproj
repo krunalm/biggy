@@ -21,6 +21,13 @@
   <ItemGroup>
     <Compile Include="..\..\Biggy\Extensions\ObjectExtensions.cs" Link="Linked\ObjectExtensions.cs" />
     <Compile Include="..\Biggy.Characterization\FakeDataReader.cs" Link="Linked\FakeDataReader.cs" />
+    <Compile Include="..\..\Biggy\BiggyList.cs" Link="Linked\BiggyList.cs" />
+    <Compile Include="..\..\Biggy\BiggyEventArgs.cs" Link="Linked\BiggyEventArgs.cs" />
+    <Compile Include="..\Shared\InflectorStub.cs" Link="Linked\InflectorStub.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
   </ItemGroup>
 
 </Project>

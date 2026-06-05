@@ -102,7 +102,9 @@ namespace Biggy.Extensions {
 
     public static T ToSingle<T>(this IDataReader rdr) where T : new() {
       var item = new T();
-      var props = item.GetType().GetProperties();
+      // typeof(T) == item.GetType() under the new() constraint; cache the
+      // property array so the per-row read path stops re-reflecting. (F1)
+      var props = GetCachedProperties(typeof(T));
       foreach (var prop in props) {
         for (int i = 0; i < rdr.FieldCount; i++) {
           if (rdr.GetName(i).Equals(prop.Name, StringComparison.InvariantCultureIgnoreCase)) {

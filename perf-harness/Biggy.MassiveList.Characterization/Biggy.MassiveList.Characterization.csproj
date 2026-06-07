@@ -22,6 +22,7 @@
   <ItemGroup>
     <Compile Include="..\..\Biggy\MassiveList.cs" Link="Linked\MassiveList.cs" />
     <Compile Include="..\..\Biggy\Massive.cs" Link="Linked\Massive.cs" />
+    <Compile Include="..\..\Biggy\MassivePG.cs" Link="Linked\MassivePG.cs" />
     <Compile Include="..\..\Biggy\BiggyEventArgs.cs" Link="Linked\BiggyEventArgs.cs" />
     <Compile Include="..\..\Biggy\Extensions\ObjectExtensions.cs" Link="Linked\ObjectExtensions.cs" />
     <Compile Include="..\Shared\InflectorStub.cs" Link="Linked\InflectorStub.cs" />
@@ -29,6 +30,7 @@
 
   <ItemGroup>
     <PackageReference Include="System.Data.SqlClient" Version="4.8.6" />
+    <PackageReference Include="Npgsql" Version="8.0.3" />
     <PackageReference Include="System.Configuration.ConfigurationManager" Version="8.0.0" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
     <PackageReference Include="xunit" Version="2.9.2" />

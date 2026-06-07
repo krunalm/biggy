@@ -1,34 +1,75 @@
 using System;
 using System.Collections.Generic;
+using System.Data.Common;
 using System.Dynamic;
+using System.Linq;
 using Biggy.Massive;
 using Xunit;
 
 namespace Biggy.MassiveList.Characterization {
 
-  // Documents a PRE-EXISTING defect discovered while investigating F5 (collapse
-  // DBTable.Insert's two round trips). The Massive write path cannot build a
-  // command at all: CreateInsertCommand -> CreateCommand(stub, null) ->
-  // conn.CreateCommand() dereferences a NULL connection and throws.
-  //
-  // Consequence: Insert / Save(Execute) / BulkInsert all throw NullReferenceException
-  // before any database round trip occurs, so F5's round-trip optimization is moot.
-  // Fixing this is a behavior change (NRE -> working insert) and needs a real
-  // SQL Server to validate the resulting SQL/identity behavior, so it is NOT
-  // done here. This test pins the CURRENT behavior so the regression is visible
-  // if/when the write path is repaired.
-  public class WritePathDefectCharacterization {
+  // Verifies the fix for the write-path NRE: CreateCommand used to dereference a
+  // null connection (conn.CreateCommand()), so CreateInsertCommand/UpdateCommand/
+  // DeleteCommand all threw NullReferenceException before any DB work. They now
+  // build a real command from an unopened provider connection (no database), with
+  // Connection left null for the caller to assign. No SQL Server required.
+  public class WritePathCommandBuildingCharacterization {
 
-    [Fact]
-    public void CreateInsertCommand_currently_throws_NRE_due_to_null_connection() {
-      var t = new DBTable("__none__", "things", "Id");
+    private static DBTable NewTable() {
+      return new DBTable("__none__", "things", "Id");
+    }
+
+    private static IDictionary<string, object> Expando() {
       dynamic ex = new ExpandoObject();
       var d = (IDictionary<string, object>)ex;
       d["Id"] = 0;
       d["Name"] = "x";
+      return d;
+    }
 
-      // CreateCommand(sql, null) -> null.CreateCommand(). Pinning the defect:
-      Assert.Throws<NullReferenceException>(() => t.CreateInsertCommand(ex));
+    [Fact]
+    public void CreateInsertCommand_builds_a_command_without_a_connection() {
+      var t = NewTable();
+
+      DbCommand cmd = t.CreateInsertCommand(Expando());
+
+      Assert.NotNull(cmd);
+      Assert.Null(cmd.Connection);                                   // caller assigns it later
+      Assert.Contains("INSERT INTO things", cmd.CommandText);
+      // Pk (Id) is an identity column and is dropped; only Name is parameterized.
+      Assert.Equal(1, cmd.Parameters.Count);
+    }
+
+    [Fact]
+    public void CreateUpdateCommand_builds_a_command_without_a_connection() {
+      var t = NewTable();
+
+      DbCommand cmd = t.CreateUpdateCommand(Expando(), 5);
+
+      Assert.NotNull(cmd);
+      Assert.Contains("UPDATE things", cmd.CommandText);
+      Assert.Equal(2, cmd.Parameters.Count);                        // Name + key
+    }
+
+    [Fact]
+    public void CreateDeleteCommand_builds_a_command_without_a_connection() {
+      var t = NewTable();
+
+      DbCommand cmd = t.CreateDeleteCommand(key: 5);
+
+      Assert.NotNull(cmd);
+      Assert.Contains("DELETE FROM things", cmd.CommandText);
+    }
+
+    [Fact]
+    public void CreateCommand_with_a_supplied_connection_is_unchanged() {
+      // The non-null path must behave exactly as before: command bound to conn.
+      var t = NewTable();
+      using (var conn = new System.Data.SqlClient.SqlConnection()) {
+        var cmd = t.CreateCommand("SELECT 1", conn);
+        Assert.Same(conn, cmd.Connection);
+        Assert.Equal("SELECT 1", cmd.CommandText);
+      }
     }
   }
 }

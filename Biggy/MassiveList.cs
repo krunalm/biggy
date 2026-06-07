@@ -23,14 +23,17 @@ namespace Biggy {
 
 
     public MassiveList(string connectionStringName, string tableName = "guess", string primaryKeyName = "id") {
-      this.ConnectionString = ConfigurationManager.ConnectionStrings[connectionStringName].ConnectionString;
+      // Null-safe so the model can be substituted (e.g. in tests) without a
+      // configured connection string; a real model still fails at connect time.
+      var connSetting = ConfigurationManager.ConnectionStrings[connectionStringName];
+      this.ConnectionString = connSetting == null ? null : connSetting.ConnectionString;
       if (tableName!="guess") {
         this.TableName = tableName;
       } else {
         var thingyType = this.GetType().GenericTypeArguments[0].Name;
         this.TableName = Inflector.Inflector.Pluralize(thingyType).ToLower();
       }
-      this.Model = new DBTable(connectionStringName, this.TableName, primaryKeyName);
+      this.Model = CreateModel(connectionStringName, this.TableName, primaryKeyName);
       this.Reload();
 
       if (this.Loaded != null) {
@@ -38,6 +41,12 @@ namespace Biggy {
         args.Items = _items;
         this.Loaded.Invoke(this, args);
       }
+    }
+
+    // Seam for substituting the data model (e.g. an in-memory DBTable in tests).
+    // Default behavior is unchanged: a real DBTable bound to the connection.
+    protected virtual DBTable CreateModel(string connectionStringName, string tableName, string primaryKeyName) {
+      return new DBTable(connectionStringName, tableName, primaryKeyName);
     }
 
     public IEnumerable<T> Query(string sql, params object[] args) {

@@ -34,7 +34,11 @@ namespace Biggy.Massive
       PrimaryKeyField = string.IsNullOrEmpty(primaryKeyField) ? "ID" : primaryKeyField;
       DescriptorField = descriptorField;
       PkIsIdentityColumn = pkIsIdentityColumn;
-      ConnectionString = ConfigurationManager.ConnectionStrings[connectionStringName].ConnectionString;
+      // Null-safe so a subclass (e.g. an in-memory model in tests) can be built
+      // without a configured connection string; the real OpenConnection() still
+      // requires a valid one and fails at connect time if it is missing.
+      var connSetting = ConfigurationManager.ConnectionStrings[connectionStringName];
+      ConnectionString = connSetting == null ? null : connSetting.ConnectionString;
     }
 
     /// <summary>
@@ -514,7 +518,7 @@ namespace Biggy.Massive
     /// <summary>
     /// Removes one or more records from the DB according to the passed-in WHERE
     /// </summary>
-    public int Delete(object key) {
+    public virtual int Delete(object key) {
       var deleted = this.Find(key);
       var result = 0;
       if (BeforeDelete(deleted)) {
@@ -527,7 +531,7 @@ namespace Biggy.Massive
     /// <summary>
     /// Removes one or more records from the DB according to the passed-in WHERE
     /// </summary>
-    public int DeleteWhere(string where = "", params object[] args) {
+    public virtual int DeleteWhere(string where = "", params object[] args) {
       return Execute(CreateDeleteCommand(where: where, args: args));
     }
 

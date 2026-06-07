@@ -56,9 +56,29 @@ breaking expectation for consumers that today rely on reference hashing).
 
 ---
 
-## F5 — `DBTable.Insert` uses two server round trips per insert
+## F5 — `DBTable.Insert` uses two server round trips per insert  🛑 NOT DONE (blocked by a pre-existing bug)
 **File:** `Biggy/Massive.cs:418-451` (SQL Server path); mirror in
 `Biggy/MassivePG.cs:39-69` (PG `RETURNING`).
+
+**Status:** 🛑 **Not implemented — the optimization is moot.** While building a
+DB-free harness to verify F5, I found the Massive **write path is pre-existing
+broken**: `CreateInsertCommand` → `CreateCommand(stub, null)` →
+`conn.CreateCommand()` dereferences a **null** connection and throws
+`NullReferenceException` *before any round trip*. (`Massive.cs:126` does
+`var result = conn.CreateCommand();` but `CreateInsertCommand`/`CreateUpdateCommand`/
+`CreateDeleteCommand`/`CreateInsertBatchCommands` all call `CreateCommand(..., null)`.)
+Empirically pinned by `WritePathDefectCharacterization` (the call throws NRE).
+
+So `Insert`/`Save`/`BulkInsert` cannot run today, and collapsing two round trips
+that never execute has no effect. Making the path work is a **separate correctness
+fix** (e.g. build a standalone command when `conn == null`), which:
+- changes behavior (NRE → a working insert), and
+- needs a **real SQL Server** to validate the generated SQL + `SCOPE_IDENTITY()`
+  identity handling (incl. the latent `(int)cmd.ExecuteScalar()` cast).
+
+Neither is safe to do here. F5 is therefore parked behind that bug fix.
+
+### (original) F5 round-trip analysis (applies only after the write path is fixed)
 
 ### Current (two round trips)
 ```csharp
@@ -102,9 +122,19 @@ integration test can prove identical inserted rows + returned identity.
 
 ---
 
-## F7 — `MassiveList<T>.Add` is O(n) membership + one DB insert per item
-**File:** `Biggy/MassiveList.cs:51-119`
-**Status:** ⏸️ **Ready — held on DB verification only.** The `GetHashCode`
+## F7 — `MassiveList<T>.Add` is O(n) membership + one DB insert per item  ✅ DONE
+**File:** `Biggy/MassiveList.cs`
+**Status:** ✅ **Implemented and verified without a database** (commit `242f9b9`).
+A `HashSet<T>` membership index (mirror of F4) makes `Add`/`Contains` O(1).
+Verified via an in-memory `DBTable` injected through a new `CreateModel` seam
+(`9fe8212`); MassiveList characterization 9/9; benchmark **66 ms → ~2.3 ms** for
+5,000 bulk adds (~28×). The per-item `Model.Insert` round trip is unchanged
+(use `AddRange`→`BulkInsert` for bulk). Original analysis retained below.
+
+---
+
+### (original) F7 — held analysis
+**Was:** ⏸️ Ready — held on DB verification only. The `GetHashCode`
 contract blocker is now **resolved** (F4 fixed the in-repo offender types). The
 in-memory half is a mechanical mirror of the verified F4 change, touching only
 the membership ops — **no DB call or SQL is changed.** It is *not* applied
@@ -149,5 +179,5 @@ The per-item `Model.Insert` round trip is API-inherent (use `AddRange` →
 | Finding | Localized fix | Status |
 |---|---|---|
 | F4 | `HashSet<T>` index + `GetHashCode` contract | ✅ **Done & verified** (`b361fd7`), ~57× on bulk add |
-| F5 | batch the identity fetch into one round trip | ⏸️ **Held** — wire-format change + `(int)SCOPE_IDENTITY()` cast; **no SQL Server to verify** |
-| F7 | mirror F4's index on `MassiveList` | ⏸️ **Ready** — contract resolved; diff above; **held only because `MassiveList` needs a live DB to run** |
+| F7 | mirror F4's index on `MassiveList` | ✅ **Done & verified without a DB** (`242f9b9`, seam `9fe8212`), ~28× on bulk add |
+| F5 | batch the identity fetch into one round trip | 🛑 **Not done** — blocked by a pre-existing write-path NRE (`CreateCommand(...,null)`); fixing that is a behavior change needing a real SQL Server |

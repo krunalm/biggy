@@ -3,13 +3,14 @@
 **Date:** 2026-06-04
 **Branch:** `claude/perf-audit-rgk0j`
 **Status:** 🟩 **Audit complete + Step 7/8 executed (option B + all items approved).**
-A DB-free safety net was established (isolated net8.0 characterization harness +
-benchmark, see "Safety net status — UPDATE"). Landed under that net: **F2**
-(time+alloc win), **F1** (alloc win, time flat), and **compiled accessors**
-(LARGE, approved — read-path time win). **F3 reverted** (within noise). The
-DB-mutation findings **F4 / F5 / F7 are held with review-ready diffs** in
-`PERF_DB_PATH_PROPOSALS.md` — they can't be *verified* here (no SQL Server) and/or
-cross a wire-format / equality-contract line. See "Step 7 — Execution results".
+A DB-free safety net was established (isolated net8.0 characterization harnesses +
+benchmark, see "Safety net status — UPDATE"). **Landed:** **F2** (time+alloc),
+**F1** (alloc), **compiled accessors** (LARGE, read-path time), **F4** (BiggyList
+upsert ~57×), and **F7** (MassiveList upsert ~28×, verified without a DB via an
+in-memory model + a `CreateModel` seam). **F3 reverted** (within noise). **F5 not
+done** — building its harness uncovered a pre-existing write-path NRE that makes
+the optimization moot (see Out of scope). Everything verified on net8.0 with no
+SQL Server. See "Step 7 — Execution results".
 
 ---
 
@@ -134,9 +135,9 @@ highest-impact findings without any external dependency.
 | F2 | `ToExpando` did uncached `GetProperties()` **per object** on every write | `Extensions/ObjectExtensions.cs:108-122` | High (write/bulk-insert hot path) | Low | MODERATE | 2 | ✅ **DONE** — time −12–16%, alloc −12%. Commit `aaf3740` |
 | F3 | `RecordToExpando` evaluates `rdr[i]` twice per field | `Extensions/ObjectExtensions.cs:74-81` | Low (dynamic read path) | Low | SAFE | 3 | ↩️ **REVERTED** — within noise, 0 alloc change |
 | F4 | `BiggyList.Add` upsert is O(n) (`Contains`+`IndexOf`) → O(n²) bulk | `BiggyList.cs` | High (bulk in-memory load) | Med | MODERATE (w/ contract) | 4 | ✅ **DONE** — ~57× on bulk add. Commit `b361fd7` |
-| F5 | `Insert` makes **two** DB round trips (`ExecuteNonQuery` + `SELECT SCOPE_IDENTITY()`) | `Massive.cs:427-434` | Med (per-insert latency) | Med | Needs discussion | 5 | **N** (changes SQL/wire behavior) |
+| F5 | `Insert` makes **two** DB round trips (`ExecuteNonQuery` + `SELECT SCOPE_IDENTITY()`) | `Massive.cs:427-434` | Med (per-insert latency) | Med | Needs discussion | 5 | 🛑 **moot** — write path NREs first (pre-existing bug) |
 | F6 | `BulkInsert` computes `requiredParams`/`batchCounter` then never uses them (dead) | `Massive.cs:460-466` | Negligible | Low | SAFE (micro) | 6 | **N** (de-prioritized micro) |
-| F7 | `MassiveList.Add` does a DB insert **and** O(n) `Contains` per single item | `MassiveList.cs:64-86` | Med (per-item loops) | Med | Needs discussion | 7 | **N** (API-inherent; `AddRange` exists) |
+| F7 | `MassiveList.Add` does O(n) `Contains` per item → O(n²) bulk | `MassiveList.cs` | High (bulk loops) | Med | MODERATE (w/ contract) | 7 | ✅ **DONE** — ~28× on bulk add (verified w/o DB). Commit `242f9b9` |
 
 See "Out of scope" for correctness issues spotted in passing (F11 truncation bug,
 F5/PG `RETURNING` smell, unused `JsonExtensions`) — **not touched** per rule 3.
@@ -307,6 +308,16 @@ single commit, satisfying the "revertable as one commit" rule.
 
 ## Out of scope (drive-by observations — NOT touched, per rule 3)
 
+- **CORRECTNESS (NEW, blocks F5) — the Massive write path NREs at command
+  creation.** `CreateCommand(sql, conn)` (`Massive.cs:126`) does
+  `conn.CreateCommand()`, but `CreateInsertCommand`/`CreateUpdateCommand`/
+  `CreateDeleteCommand`/`CreateInsertBatchCommands` all call it with `conn == null`,
+  so `Insert`/`Save`/`BulkInsert` throw `NullReferenceException` before any DB
+  round trip. Empirically pinned by `WritePathDefectCharacterization`. A fix
+  (build a standalone command when `conn == null`) is a behavior change that needs
+  a real SQL Server to validate the generated SQL + identity handling — left for
+  an owner decision. This is why F5 is moot.
+
 - **CORRECTNESS — `SaveAsync` can corrupt the JSON file** (`BiggyList.cs:184-189`):
   `File.OpenWrite` opens **without truncating**, and writes via
   `Encoding.Default.GetBytes`. If the new JSON is shorter than the existing file,
@@ -338,8 +349,10 @@ single commit, satisfying the "revertable as one commit" rule.
 - **Compiled accessors** — ✅ approved and landed (`3fa0ba9`,
   `PERF_REFACTOR_compiled_accessors.md`).
 - **F4** — ✅ approved (`GetHashCode` contract) and landed (`b361fd7`).
-- **F7 / F5** — held with review-ready diffs in `PERF_DB_PATH_PROPOSALS.md`;
-  both need a reachable SQL Server to verify (F5 also changes executed SQL).
+- **F7** — ✅ approved and landed (`242f9b9`), verified without a DB via an
+  in-memory model + the `CreateModel` seam (`9fe8212`).
+- **F5** — 🛑 not done: blocked by a pre-existing write-path NRE (see Out of scope);
+  optimizing it is moot until that correctness bug is fixed (needs a real DB).
 
 ---
 
@@ -356,8 +369,8 @@ container noise); allocations are deterministic.
 | **Compiled accessors** (LARGE) | ✅ **landed** | `ToSingle` 6.07 → ~5.0 ms (**~−17%**); `ToExpando` ~flat | unchanged (0.78 / 3.81 MB) | `3fa0ba9` |
 | **F3** `RecordToExpando` | ↩️ **reverted** | 3.93 → 3.72 ms (within noise) | 3.30 → 3.30 MB (no change) | — |
 | **F4** `BiggyList.Add` (O(n²)→O(1)) | ✅ **landed** | 98.7 → ~1.7 ms / 5k adds (**~57×**) | 0.91 → 1.22 MB (one-time index) | `b361fd7` |
-| **F7** `MassiveList.Add` | ⏸️ **ready** (diff written) | — | — | held: needs live DB |
-| **F5** `Insert` round-trips | ⏸️ **held** | — | — | wire-format + needs live DB |
+| **F7** `MassiveList.Add` (O(n²)→O(1)) | ✅ **landed** (verified w/o DB) | 66.0 → ~2.3 ms / 5k adds (**~28×**) | 1.18 → 1.49 MB (one-time index) | `242f9b9` (seam `9fe8212`) |
+| **F5** `Insert` round-trips | 🛑 **not done** | — | — | moot: write path NREs first (pre-existing bug) |
 
 Cumulative on the read path (`ToSingle<T>`): **6.256 → ~5.0 ms (~−20% time) and
 1.32 → 0.78 MB (−41% alloc)** vs the original baseline. Write path (`ToExpando`):
@@ -403,14 +416,18 @@ non-compilable properties. Characterization 12/12.
 types. DB-free BiggyList characterization 10/10 (incl. a contract-change test);
 bulk-add **98.7 → ~1.7 ms (~57×, O(n²)→O(n))**.
 
-**Still held (review-ready diffs in `PERF_DB_PATH_PROPOSALS.md`):**
-- **F7** — contract blocker now resolved by F4; the in-memory index change is a
-  mechanical mirror of F4 (no SQL touched). **Held only because `MassiveList`
-  can't be instantiated here** (ctor does a live `Reload()` DB query). Exact diff
-  written; apply once a SQL Server is reachable.
-- **F5** — batch the identity fetch into one round trip; **changes executed SQL
-  (wire format)** + has a latent `(int)SCOPE_IDENTITY()` cast; **no SQL Server to
-  verify.** **Held — needs DB + breaking approval.**
+**F7 (MassiveList O(1) upsert index) — landed:** commit `242f9b9` (seam `9fe8212`).
+Verified **without a database** by injecting an in-memory `DBTable` through a new
+`CreateModel` seam; MassiveList characterization 9/9; bulk-add **66 → ~2.3 ms
+(~28×)**. Mirror of F4.
+
+**F5 — NOT done (`PERF_DB_PATH_PROPOSALS.md`):** building the DB-free harness
+surfaced a **pre-existing bug**: the write path NREs at command creation
+(`CreateCommand(stub, null)` → `conn.CreateCommand()` on a null connection), so
+`Insert`/`Save`/`BulkInsert` throw before any round trip. F5's two-round-trip
+optimization is therefore **moot**; making the path work is a behavior-changing
+correctness fix that needs a real SQL Server to validate. Pinned by
+`WritePathDefectCharacterization`. Left for you (see Out of scope).
 
 ---
 
@@ -432,10 +449,13 @@ green characterization suite (12/12) and benchmark, each change a revertable com
   read path (`ToSingle<T>`). Cumulative read path ≈ **−20% time, −41% alloc**.
 - **F4** `b361fd7` (approved contract): BiggyList bulk upsert **~57× faster**
   (O(n²)→O(1)); `GetHashCode` added to 5 consumer types.
+- **F7** `242f9b9` (seam `9fe8212`): MassiveList bulk upsert **~28× faster**
+  (O(n²)→O(1)), verified **without a database** via an in-memory model.
 - **F3** reverted (within noise).
-- **F7 / F5** held with review-ready diffs (`PERF_DB_PATH_PROPOSALS.md`): F7 is a
-  verified-by-analogy mirror of F4 but `MassiveList` can't run here (live DB in
-  its ctor); F5 also changes executed SQL. Both need a reachable SQL Server.
+- **F5** 🛑 not done: building its harness uncovered a **pre-existing write-path
+  NRE** (`CreateCommand(...,null)`) — `Insert`/`Save`/`BulkInsert` throw before any
+  round trip, so the optimization is moot. The fix is a behavior change needing a
+  real SQL Server; flagged in Out of scope.
 
 All work is on `claude/perf-audit-rgk0j`. **No public API, exported signature,
 schema, or wire format was changed.** A non-invasive net8.0 test/benchmark harness

@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    DB-free characterization harness for MassiveList<T> (perf finding F7).
+    Links MassiveList.cs + Massive.cs (DBTable) + ObjectExtensions.cs and drives
+    them through an in-memory DBTable (InMemoryDBTable) substituted via the
+    CreateModel seam - no SQL Server. The SqlClient/Configuration packages are
+    only needed so Massive.cs compiles; their types are never instantiated here
+    (InMemoryDBTable overrides every data method MassiveList uses).
+    Not part of Biggy.sln. Run: dotnet test
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>Biggy.MassiveList.Characterization</RootNamespace>
+    <AssemblyName>Biggy.MassiveList.Characterization</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\Biggy\MassiveList.cs" Link="Linked\MassiveList.cs" />
+    <Compile Include="..\..\Biggy\Massive.cs" Link="Linked\Massive.cs" />
+    <Compile Include="..\..\Biggy\BiggyEventArgs.cs" Link="Linked\BiggyEventArgs.cs" />
+    <Compile Include="..\..\Biggy\Extensions\ObjectExtensions.cs" Link="Linked\ObjectExtensions.cs" />
+    <Compile Include="..\Shared\InflectorStub.cs" Link="Linked\InflectorStub.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Data.SqlClient" Version="4.8.6" />
+    <PackageReference Include="System.Configuration.ConfigurationManager" Version="8.0.0" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+</Project>

@@ -23,11 +23,16 @@
     <Compile Include="..\Biggy.Characterization\FakeDataReader.cs" Link="Linked\FakeDataReader.cs" />
     <Compile Include="..\..\Biggy\BiggyList.cs" Link="Linked\BiggyList.cs" />
     <Compile Include="..\..\Biggy\BiggyEventArgs.cs" Link="Linked\BiggyEventArgs.cs" />
+    <Compile Include="..\..\Biggy\MassiveList.cs" Link="Linked\MassiveList.cs" />
+    <Compile Include="..\..\Biggy\Massive.cs" Link="Linked\Massive.cs" />
     <Compile Include="..\Shared\InflectorStub.cs" Link="Linked\InflectorStub.cs" />
+    <Compile Include="..\Biggy.MassiveList.Characterization\InMemoryModel.cs" Link="Linked\InMemoryModel.cs" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+    <PackageReference Include="System.Data.SqlClient" Version="4.8.6" />
+    <PackageReference Include="System.Configuration.ConfigurationManager" Version="8.0.0" />
   </ItemGroup>
 
 </Project>

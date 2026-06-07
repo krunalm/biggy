@@ -6,6 +6,7 @@ using System.Linq;
 using Biggy;
 using Biggy.Characterization;
 using Biggy.Extensions;
+using Biggy.MassiveList.Characterization;
 
 namespace Biggy.Benchmarks {
 
@@ -26,6 +27,19 @@ namespace Biggy.Benchmarks {
       return p != null && this.Sku == p.Sku;
     }
     public override int GetHashCode() { return Sku == null ? 0 : Sku.GetHashCode(); }
+  }
+
+  // Contract-compliant item for the MassiveList bulk-add scenario (F7): Id is the
+  // identity PK assigned by the in-memory model; Equals/GetHashCode key on Code.
+  public class MItem {
+    public int Id { get; set; }
+    public string Code { get; set; }
+    public string Name { get; set; }
+    public override bool Equals(object obj) {
+      var p = obj as MItem;
+      return p != null && this.Code == p.Code;
+    }
+    public override int GetHashCode() { return Code == null ? 0 : Code.GetHashCode(); }
   }
 
   internal static class Program {
@@ -76,6 +90,17 @@ namespace Biggy.Benchmarks {
         return list.Count;
       }, iterations: 5, warmup: 2);
       try { Directory.Delete(biggyDir, true); } catch { }
+
+      // F7: bulk-add distinct items into a fresh MassiveList (in-memory model,
+      // so this measures the in-memory membership/upsert cost only - the same
+      // O(n^2) _items.Contains pattern as BiggyList).
+      Measure($"F7 MassiveList.Add x{BiggyCount} (bulk upsert)", () => {
+        var list = new InMemoryMassiveList<MItem>("Id");
+        for (int i = 0; i < BiggyCount; i++) {
+          list.Add(new MItem { Code = "C-" + i, Name = "n" + i });
+        }
+        return list.Count;
+      }, iterations: 5, warmup: 2);
     }
 
     private static void Build() {

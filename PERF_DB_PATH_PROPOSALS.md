@@ -60,11 +60,18 @@ breaking expectation for consumers that today rely on reference hashing).
 **File:** `Biggy/Massive.cs:418-451` (SQL Server path); mirror in
 `Biggy/MassivePG.cs:39-69` (PG `RETURNING`).
 
-**Status:** 🛑 **Not implemented — the optimization is moot.** While building a
-DB-free harness to verify F5, I found the Massive **write path is pre-existing
-broken**: `CreateInsertCommand` → `CreateCommand(stub, null)` →
-`conn.CreateCommand()` dereferences a **null** connection and throws
-`NullReferenceException` *before any round trip*. (`Massive.cs:126` does
+**Status:** ⏸️ **Unblocked, not yet implemented.** The pre-existing write-path
+NRE that made F5 moot is now **FIXED** (`a3627d8`): `CreateCommand(..., null)`
+builds a command from an unopened provider connection instead of dereferencing
+null. With the write path functional, F5 (collapse the two round trips) is now a
+real, verifiable optimization — it can be checked **without a SQL Server** using a
+fake `DbConnection`/`DbCommand` (override `CreateConnection`/`OpenConnection` to
+return a fake that counts `ExecuteNonQuery`/`ExecuteScalar` calls). Not done yet
+because the last instruction was scoped to fixing the NRE; say the word to land F5.
+
+Historical note: F5 was moot because the write path threw
+`NullReferenceException` at `CreateInsertCommand` → `CreateCommand(stub, null)` →
+`conn.CreateCommand()` *before any round trip*. (`Massive.cs:126` does
 `var result = conn.CreateCommand();` but `CreateInsertCommand`/`CreateUpdateCommand`/
 `CreateDeleteCommand`/`CreateInsertBatchCommands` all call `CreateCommand(..., null)`.)
 Empirically pinned by `WritePathDefectCharacterization` (the call throws NRE).
@@ -180,4 +187,5 @@ The per-item `Model.Insert` round trip is API-inherent (use `AddRange` →
 |---|---|---|
 | F4 | `HashSet<T>` index + `GetHashCode` contract | ✅ **Done & verified** (`b361fd7`), ~57× on bulk add |
 | F7 | mirror F4's index on `MassiveList` | ✅ **Done & verified without a DB** (`242f9b9`, seam `9fe8212`), ~28× on bulk add |
-| F5 | batch the identity fetch into one round trip | 🛑 **Not done** — blocked by a pre-existing write-path NRE (`CreateCommand(...,null)`); fixing that is a behavior change needing a real SQL Server |
+| Write-path NRE | build command without null-conn deref (`CreateConnection` seam) | ✅ **Fixed & verified w/o DB** (`a3627d8`), incl. PG |
+| F5 | batch the identity fetch into one round trip | ⏸️ **Unblocked** by the NRE fix; now verifiable via a fake connection (no SQL Server). Awaiting go-ahead |

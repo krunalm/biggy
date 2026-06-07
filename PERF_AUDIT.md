@@ -7,10 +7,11 @@ A DB-free safety net was established (isolated net8.0 characterization harnesses
 benchmark, see "Safety net status — UPDATE"). **Landed:** **F2** (time+alloc),
 **F1** (alloc), **compiled accessors** (LARGE, read-path time), **F4** (BiggyList
 upsert ~57×), and **F7** (MassiveList upsert ~28×, verified without a DB via an
-in-memory model + a `CreateModel` seam). **F3 reverted** (within noise). **F5 not
-done** — building its harness uncovered a pre-existing write-path NRE that makes
-the optimization moot (see Out of scope). Everything verified on net8.0 with no
-SQL Server. See "Step 7 — Execution results".
+in-memory model + a `CreateModel` seam). **F3 reverted** (within noise). Also
+**fixed a pre-existing write-path NRE** (`CreateCommand(...,null)`, commit
+`a3627d8`), which **unblocks F5** (round-trip optimization, not yet done).
+Everything verified on net8.0 with **no SQL Server**. See "Step 7 — Execution
+results".
 
 ---
 
@@ -308,15 +309,16 @@ single commit, satisfying the "revertable as one commit" rule.
 
 ## Out of scope (drive-by observations — NOT touched, per rule 3)
 
-- **CORRECTNESS (NEW, blocks F5) — the Massive write path NREs at command
-  creation.** `CreateCommand(sql, conn)` (`Massive.cs:126`) does
-  `conn.CreateCommand()`, but `CreateInsertCommand`/`CreateUpdateCommand`/
-  `CreateDeleteCommand`/`CreateInsertBatchCommands` all call it with `conn == null`,
-  so `Insert`/`Save`/`BulkInsert` throw `NullReferenceException` before any DB
-  round trip. Empirically pinned by `WritePathDefectCharacterization`. A fix
-  (build a standalone command when `conn == null`) is a behavior change that needs
-  a real SQL Server to validate the generated SQL + identity handling — left for
-  an owner decision. This is why F5 is moot.
+- **CORRECTNESS (FIXED) — the Massive write path NRE at command creation.**
+  `CreateCommand(sql, conn)` did `conn.CreateCommand()`, but
+  `CreateInsertCommand`/`CreateUpdateCommand`/`CreateDeleteCommand`/
+  `CreateInsertBatchCommands` call it with `conn == null`, so `Insert`/`Save`/
+  `BulkInsert` threw `NullReferenceException` before any DB round trip.
+  **Fixed in `a3627d8`** (approved): build the command from an unopened,
+  provider-correct connection when none is supplied (new `CreateConnection`
+  seam; `PGTable` overrides it). Verified without a database (14/14, incl. the
+  PG path via real Npgsql). End-to-end execution still needs a real connection,
+  as expected. This also **unblocks F5** (see below).
 
 - **CORRECTNESS — `SaveAsync` can corrupt the JSON file** (`BiggyList.cs:184-189`):
   `File.OpenWrite` opens **without truncating**, and writes via
@@ -370,7 +372,8 @@ container noise); allocations are deterministic.
 | **F3** `RecordToExpando` | ↩️ **reverted** | 3.93 → 3.72 ms (within noise) | 3.30 → 3.30 MB (no change) | — |
 | **F4** `BiggyList.Add` (O(n²)→O(1)) | ✅ **landed** | 98.7 → ~1.7 ms / 5k adds (**~57×**) | 0.91 → 1.22 MB (one-time index) | `b361fd7` |
 | **F7** `MassiveList.Add` (O(n²)→O(1)) | ✅ **landed** (verified w/o DB) | 66.0 → ~2.3 ms / 5k adds (**~28×**) | 1.18 → 1.49 MB (one-time index) | `242f9b9` (seam `9fe8212`) |
-| **F5** `Insert` round-trips | 🛑 **not done** | — | — | moot: write path NREs first (pre-existing bug) |
+| Write-path NRE | ✅ **fixed** | n/a (correctness) | — | `a3627d8` (verified w/o DB, incl. PG) |
+| **F5** `Insert` round-trips | ⏸️ **unblocked, not yet done** | — | — | now verifiable via a fake connection; awaiting go-ahead |
 
 Cumulative on the read path (`ToSingle<T>`): **6.256 → ~5.0 ms (~−20% time) and
 1.32 → 0.78 MB (−41% alloc)** vs the original baseline. Write path (`ToExpando`):
@@ -452,10 +455,11 @@ green characterization suite (12/12) and benchmark, each change a revertable com
 - **F7** `242f9b9` (seam `9fe8212`): MassiveList bulk upsert **~28× faster**
   (O(n²)→O(1)), verified **without a database** via an in-memory model.
 - **F3** reverted (within noise).
-- **F5** 🛑 not done: building its harness uncovered a **pre-existing write-path
-  NRE** (`CreateCommand(...,null)`) — `Insert`/`Save`/`BulkInsert` throw before any
-  round trip, so the optimization is moot. The fix is a behavior change needing a
-  real SQL Server; flagged in Out of scope.
+- **Write-path NRE** `a3627d8` (correctness fix, approved): `CreateCommand(...,null)`
+  no longer dereferences null — the write path can build commands again. Verified
+  without a database (14/14, incl. the PG path via real Npgsql).
+- **F5** ⏸️ unblocked by that fix, not yet done: the round-trip optimization is now
+  verifiable via a fake connection (no SQL Server). Awaiting your go-ahead.
 
 All work is on `claude/perf-audit-rgk0j`. **No public API, exported signature,
 schema, or wire format was changed.** A non-invasive net8.0 test/benchmark harness

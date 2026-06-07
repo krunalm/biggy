@@ -19,10 +19,11 @@ namespace Biggy.Massive {
       : base(connectionStringName, tableName, primaryKeyField, descriptorField, pkIsIdentityColumn) { }
 
 
-    public override System.Data.Common.DbConnection OpenConnection() {
-      var result = new NpgsqlConnection(this.ConnectionString);
-      result.Open();
-      return result;
+    // Provider-correct connection factory; base OpenConnection() opens it. This
+    // keeps both OpenConnection and the null-connection command-creation path
+    // (CreateCommand) building Npgsql objects rather than SqlClient ones.
+    protected override System.Data.Common.DbConnection CreateConnection() {
+      return new NpgsqlConnection(this.ConnectionString);
     }
 
     protected override string BuildSelect(string where, string orderBy, int limit) {

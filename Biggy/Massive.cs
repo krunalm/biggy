@@ -34,7 +34,11 @@ namespace Biggy.Massive
       PrimaryKeyField = string.IsNullOrEmpty(primaryKeyField) ? "ID" : primaryKeyField;
       DescriptorField = descriptorField;
       PkIsIdentityColumn = pkIsIdentityColumn;
-      ConnectionString = ConfigurationManager.ConnectionStrings[connectionStringName].ConnectionString;
+      // Null-safe so a subclass (e.g. an in-memory model in tests) can be built
+      // without a configured connection string; the real OpenConnection() still
+      // requires a valid one and fails at connect time if it is missing.
+      var connSetting = ConfigurationManager.ConnectionStrings[connectionStringName];
+      ConnectionString = connSetting == null ? null : connSetting.ConnectionString;
     }
 
     /// <summary>
@@ -119,7 +123,14 @@ namespace Biggy.Massive
     /// Creates a DBCommand that you can use for loving your database.
     /// </summary>
     public virtual DbCommand CreateCommand(string sql, DbConnection conn, params object[] args) {
-      var result = conn.CreateCommand();
+      // Several callers (CreateInsertCommand/CreateUpdateCommand/CreateDeleteCommand/
+      // CreateInsertBatchCommands) build a command up front with conn == null and
+      // set Connection later. Dereferencing a null conn here used to throw NRE, so
+      // when no connection is supplied, create the command from an UNOPENED,
+      // provider-correct connection (no database round trip) and leave its
+      // Connection null for the caller to assign.
+      var factory = conn ?? CreateConnection();
+      var result = factory.CreateCommand();
       result.Connection = conn;
       result.CommandText = sql;
       if (args.Length > 0) {
@@ -129,13 +140,22 @@ namespace Biggy.Massive
     }
 
     /// <summary>
-    /// Returns and OpenConnection
+    /// Returns an OpenConnection
     /// </summary>
     public virtual DbConnection OpenConnection() {
-      //hard-code this, the overrides for PG etc will reset this.
-      var result = new SqlConnection(this.ConnectionString);
+      var result = CreateConnection();
       result.Open();
       return result;
+    }
+
+    /// <summary>
+    /// Creates a new, unopened provider connection. Overridden by provider
+    /// subclasses (e.g. PGTable) so command/connection creation stays
+    /// provider-correct.
+    /// </summary>
+    protected virtual DbConnection CreateConnection() {
+      //hard-code this, the overrides for PG etc will reset this.
+      return new SqlConnection(this.ConnectionString);
     }
 
     /// <summary>
@@ -514,7 +534,7 @@ namespace Biggy.Massive
     /// <summary>
     /// Removes one or more records from the DB according to the passed-in WHERE
     /// </summary>
-    public int Delete(object key) {
+    public virtual int Delete(object key) {
       var deleted = this.Find(key);
       var result = 0;
       if (BeforeDelete(deleted)) {
@@ -527,7 +547,7 @@ namespace Biggy.Massive
     /// <summary>
     /// Removes one or more records from the DB according to the passed-in WHERE
     /// </summary>
-    public int DeleteWhere(string where = "", params object[] args) {
+    public virtual int DeleteWhere(string where = "", params object[] args) {
       return Execute(CreateDeleteCommand(where: where, args: args));
     }
 

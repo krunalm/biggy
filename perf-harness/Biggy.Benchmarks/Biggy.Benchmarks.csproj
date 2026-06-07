@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Self-contained micro-benchmark for the Biggy mapping hot paths (F1/F2/F3).
+    Isolated from Biggy.sln (net45); links the single file under test plus the
+    in-memory IDataReader fake from the characterization project.
+    Run (Release):  dotnet run -c Release
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Optimize>true</Optimize>
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <RootNamespace>Biggy.Benchmarks</RootNamespace>
+    <AssemblyName>Biggy.Benchmarks</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\Biggy\Extensions\ObjectExtensions.cs" Link="Linked\ObjectExtensions.cs" />
+    <Compile Include="..\Biggy.Characterization\FakeDataReader.cs" Link="Linked\FakeDataReader.cs" />
+    <Compile Include="..\..\Biggy\BiggyList.cs" Link="Linked\BiggyList.cs" />
+    <Compile Include="..\..\Biggy\BiggyEventArgs.cs" Link="Linked\BiggyEventArgs.cs" />
+    <Compile Include="..\..\Biggy\MassiveList.cs" Link="Linked\MassiveList.cs" />
+    <Compile Include="..\..\Biggy\Massive.cs" Link="Linked\Massive.cs" />
+    <Compile Include="..\Shared\InflectorStub.cs" Link="Linked\InflectorStub.cs" />
+    <Compile Include="..\Biggy.MassiveList.Characterization\InMemoryModel.cs" Link="Linked\InMemoryModel.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+    <PackageReference Include="System.Data.SqlClient" Version="4.8.6" />
+    <PackageReference Include="System.Configuration.ConfigurationManager" Version="8.0.0" />
+  </ItemGroup>
+
+</Project>

@@ -18,5 +18,10 @@ namespace Web.Models {
       var p1 = (Product)obj;
       return this.Sku == p1.Sku;
     }
+
+    // Consistent with Equals (keyed on Sku) for BiggyList's hash index (F4).
+    public override int GetHashCode() {
+      return this.Sku == null ? 0 : this.Sku.GetHashCode();
+    }
   }
 }
